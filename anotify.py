@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # anotify.py
-# Copyright (c) 2012 magnific0
+# Copyright (c) 2012 magnific0 <jacco.geul@gmail.com>
 #
 # based on:
 # growl.py
@@ -28,12 +28,14 @@
 
 SCRIPT_NAME = 'anotify'
 SCRIPT_AUTHOR = 'magnific0'
-SCRIPT_VERSION = '1.0.0'
+SCRIPT_VERSION = '1.0.2'
 SCRIPT_LICENSE = 'MIT'
 SCRIPT_DESC = 'Sends libnotify notifications upon events.'
 
 
 # Changelog
+# 2014-05-10: v1.0.1 Change hook_print callback argument type of
+#                    displayed/highlight (WeeChat >= 1.0)
 # 2012-09-20: v1.0.0 Forked from original and adapted for libnotify.
 
 # -----------------------------------------------------------------------------
@@ -54,6 +56,7 @@ SETTINGS = {
     'sticky': 'off',
     'sticky_away': 'on',
     'icon': '/usr/share/pixmaps/weechat.xpm',
+    'ignore_msg_regex_list': '\*status:'
 }
 
 
@@ -62,9 +65,9 @@ SETTINGS = {
 # -----------------------------------------------------------------------------
 try:
     import re
-    import os
     import weechat
-    import pynotify
+    import notify2
+    import subprocess
     IMPORT_OK = True
 except ImportError as error:
     IMPORT_OK = False
@@ -174,7 +177,7 @@ def notify_highlighted_message(prefix, message):
             'Highlight',
             'Highlighted Message',
             "{0}: {1}".format(prefix, message),
-            priority=pynotify.URGENCY_CRITICAL)
+            priority=notify2.URGENCY_CRITICAL)
 
 
 def notify_public_message_or_action(prefix, message, highlighted):
@@ -217,7 +220,8 @@ def notify_private_message_or_action(prefix, message, highlighted):
                 a_notify(
                     'Private',
                     'Private Message',
-                    '{0}: {1}'.format(prefix, message))
+                    '{0}: {1}'.format(prefix, message),
+                    priority=notify2.URGENCY_NORMAL)
 
 
 def notify_public_action_message(prefix, message, highlighted):
@@ -229,7 +233,7 @@ def notify_public_action_message(prefix, message, highlighted):
             'Action',
             'Public Action Message',
             '{0}: {1}'.format(prefix, message),
-            priority=pynotify.URGENCY_NORMAL)
+            priority=notify2.URGENCY_NORMAL)
 
 
 def notify_private_action_message(prefix, message, highlighted):
@@ -241,7 +245,7 @@ def notify_private_action_message(prefix, message, highlighted):
             'Action',
             'Private Action Message',
             '{0}: {1}'.format(prefix, message),
-            priority=pynotify.URGENCY_NORMAL)
+            priority=notify2.URGENCY_NORMAL)
 
 
 def notify_notice_message(prefix, message, highlighted):
@@ -381,7 +385,7 @@ def cb_process_message(
     dcc_buffer_regex = re.compile(r'^irc_dcc\.', re.UNICODE)
     dcc_buffer_match = dcc_buffer_regex.match(buffer_name)
     highlighted = False
-    if highlight == "1":
+    if int(highlight):
         highlighted = True
     # Private DCC message identifies itself as public.
     if is_public_message and dcc_buffer_match:
@@ -401,7 +405,23 @@ def cb_process_message(
     return weechat.WEECHAT_RC_OK
 
 
-def a_notify(notification, title, description, priority=pynotify.URGENCY_LOW):
+def ignore_notification(title, description):
+    for ir in weechat.config_get_plugin("ignore_msg_regex_list").split(','):
+        regex = re.compile(r'%s' % ir, re.UNICODE)
+        match = regex.match( description )
+        if match:
+            return True
+
+    # Ignore notifications if WeeChat window is on focus
+    current_window_name = subprocess.getoutput('xdotool getactivewindow | xargs -r xdotool getwindowname')
+    regex = re.compile(r'WeeChat [0-9\.]+')
+    match = regex.match( current_window_name )
+    if match:
+        return True
+    return False
+
+
+def a_notify(notification, title, description, priority=notify2.URGENCY_LOW):
     '''Returns whether notifications should be sticky.'''
     is_away = STATE['is_away']
     icon = STATE['icon']
@@ -411,8 +431,11 @@ def a_notify(notification, title, description, priority=pynotify.URGENCY_LOW):
     if weechat.config_get_plugin('sticky_away') == 'on' and is_away:
         time_out = 0
     try:
-        pynotify.init("wee-notifier")
-        wn = pynotify.Notification(title, description, icon)
+        if ignore_notification( title, description ):
+            return
+
+        notify2.init("wee-notifier")
+        wn = notify2.Notification(title, description, icon)
         wn.set_urgency(priority)
         wn.set_timeout(time_out)
         wn.show()
